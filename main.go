@@ -64,4 +64,6 @@ func main() {
 			}
 		})
 	}
+
+	r.Run(os.Getenv("WEBSERVER_BIND"))
 }

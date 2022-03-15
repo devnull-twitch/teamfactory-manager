@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: game-api
+  labels:
+    app: api
+spec:
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+        - 
+          name: game-api
+          image: ghcr.io/devnull-twitch/game-api:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            -
+              name: WEBSERVER_BIND
+              value: ":8080"
+            -
+              name: EXTERNAL_IP
+              value: "172.105.85.184"
+      imagePullSecrets:
+        - name: dockerconfigjson-ghcr
