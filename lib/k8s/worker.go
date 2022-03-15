@@ -133,7 +133,7 @@ func Worker() chan<- Request {
 							Name:            "gameserver",
 							Image:           "ghcr.io/devnull-twitch/teamfactory-server:latest",
 							Ports: []v1.ContainerPort{
-								{ContainerPort: 50125},
+								{ContainerPort: 50125, Protocol: v1.ProtocolUDP},
 							},
 						},
 					},
@@ -159,7 +159,7 @@ func Worker() chan<- Request {
 					},
 					Type: v1.ServiceTypeNodePort,
 					Ports: []v1.ServicePort{
-						{Port: 50125},
+						{Port: 50125, Protocol: v1.ProtocolUDP},
 					},
 				},
 			}, metav1.CreateOptions{})
