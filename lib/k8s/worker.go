@@ -128,8 +128,9 @@ func Worker() chan<- Request {
 					},
 					Containers: []v1.Container{
 						{
-							Name:  "gameserver",
-							Image: "ghcr.io/devnull-twitch/teamfactory-server",
+							ImagePullPolicy: v1.PullAlways,
+							Name:            "gameserver",
+							Image:           "ghcr.io/devnull-twitch/teamfactory-server:latest",
 							Ports: []v1.ContainerPort{
 								{ContainerPort: 50125},
 							},

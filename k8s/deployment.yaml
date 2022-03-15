@@ -1,22 +1,26 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: game-api
+  name: teamfactory-api
+  namespace: teamfactory
   labels:
     app: api
 spec:
   selector:
     matchLabels:
       app: api
+      game: teamfactory
   template:
     metadata:
+      namespace: teamfactory
       labels:
         app: api
+        game: teamfactory
     spec:
       containers:
         - 
-          name: game-api
-          image: ghcr.io/devnull-twitch/game-api:latest
+          name: teamfactory-api
+          image: ghcr.io/devnull-twitch/teamfactory-manager:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
