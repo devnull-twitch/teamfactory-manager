@@ -44,6 +44,11 @@ const (
 	LobbyCodeLength int = 5
 )
 
+var (
+	freeListLock sync.Mutex       = sync.Mutex{}
+	freeList     []gameserverData = make([]gameserverData, 0)
+)
+
 func Worker() chan<- Request {
 	config, err := rest.InClusterConfig()
 	if err != nil {
@@ -53,9 +58,6 @@ func Worker() chan<- Request {
 	if err != nil {
 		panic(err.Error())
 	}
-
-	freeListLock := sync.Mutex{}
-	freeList := make([]gameserverData, 0)
 
 	requestChan := make(chan Request)
 	go func() {
@@ -107,77 +109,131 @@ func Worker() chan<- Request {
 
 	go func() {
 		for {
-			time.Sleep(time.Second * 5)
-			if len(freeList) >= MinFreeServers {
-				continue
+			time.Sleep(time.Second * 10)
+			if len(freeList) < MinFreeServers {
+				spawnNewServer(clientset)
+			} else {
+				for _, data := range freeList {
+					validateServer(clientset, data.Identifier)
+				}
 			}
 
-			ident := String(LobbyCodeLength)
-			_, err := clientset.CoreV1().Pods("teamfactory").Create(context.Background(), &v1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					GenerateName: "teamfactory-gameserver",
-					Labels: map[string]string{
-						"game":  "teamfactory",
-						"ident": ident,
-					},
-				},
-				Spec: v1.PodSpec{
-					RestartPolicy: v1.RestartPolicyNever,
-					ImagePullSecrets: []v1.LocalObjectReference{
-						{Name: "dockerconfigjson-ghcr"},
-					},
-					Containers: []v1.Container{
-						{
-							ImagePullPolicy: v1.PullAlways,
-							TTY:             true,
-							Name:            "gameserver",
-							Image:           "ghcr.io/devnull-twitch/teamfactory-server:latest",
-							Ports: []v1.ContainerPort{
-								{ContainerPort: 50125, Protocol: v1.ProtocolUDP},
-							},
-						},
-					},
-				},
-			}, metav1.CreateOptions{})
-
-			if err != nil {
-				panic(fmt.Errorf("pod creation panic: %w", err))
-			}
-
-			newService, err := clientset.CoreV1().Services("teamfactory").Create(context.Background(), &v1.Service{
-				ObjectMeta: metav1.ObjectMeta{
-					GenerateName: "teamfactory-gs-service",
-					Labels: map[string]string{
-						"game":  "teamfactory",
-						"ident": ident,
-					},
-				},
-				Spec: v1.ServiceSpec{
-					Selector: map[string]string{
-						"game":  "teamfactory",
-						"ident": ident,
-					},
-					Type: v1.ServiceTypeNodePort,
-					Ports: []v1.ServicePort{
-						{Port: 50125, Protocol: v1.ProtocolUDP},
-					},
-				},
-			}, metav1.CreateOptions{})
-
-			if err != nil {
-				panic(fmt.Errorf("service creation panic: %w", err))
-			}
-
-			freeListLock.Lock()
-			freeList = append(freeList, gameserverData{
-				Port:       int(newService.Spec.Ports[0].NodePort),
-				Identifier: ident,
-			})
-			freeListLock.Unlock()
+			cleanupServers(clientset)
 		}
 	}()
 
 	return requestChan
+}
+
+func cleanupServers(clientset *kubernetes.Clientset) {
+	podList, err := clientset.CoreV1().Pods("teamfactory").List(context.Background(), metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("game=teamfactory"),
+		FieldSelector: "status.phase=Failed,status.phase=Succeeded",
+	})
+	if err != nil {
+		logrus.WithError(err).Error("unable to list pods for cleanup")
+	}
+
+	for _, p := range podList.Items {
+		clientset.CoreV1().Pods("teamfactory").Delete(context.Background(), p.Name, metav1.DeleteOptions{})
+	}
+}
+
+func validateServer(clientset *kubernetes.Clientset, ident string) {
+	freeListLock.Lock()
+	defer freeListLock.Unlock()
+
+	filteredList := make([]gameserverData, 0, len(freeList))
+	for _, gsInfo := range freeList {
+		list, err := clientset.CoreV1().Pods("teamfactory").List(context.Background(), metav1.ListOptions{
+			LabelSelector: fmt.Sprintf("game=teamfactory,ident=%s", gsInfo.Identifier),
+			FieldSelector: "status.phase=Running,status.phase=Pending",
+		})
+		if err != nil {
+			logrus.WithError(err).Warn("erro listing expected running gameserver")
+			continue
+		}
+
+		if len(list.Items) > 0 {
+			filteredList = append(filteredList, gsInfo)
+		} else {
+			logrus.Warn("removed gameserver after not finding it")
+		}
+	}
+	freeList = filteredList
+}
+
+func spawnNewServer(clientset *kubernetes.Clientset) {
+	ident := String(LobbyCodeLength)
+	createdPod, err := clientset.CoreV1().Pods("teamfactory").Create(context.Background(), &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: "teamfactory-gameserver",
+			Labels: map[string]string{
+				"game":  "teamfactory",
+				"ident": ident,
+			},
+		},
+		Spec: v1.PodSpec{
+			RestartPolicy: v1.RestartPolicyNever,
+			ImagePullSecrets: []v1.LocalObjectReference{
+				{Name: "dockerconfigjson-ghcr"},
+			},
+			Containers: []v1.Container{
+				{
+					ImagePullPolicy: v1.PullAlways,
+					TTY:             true,
+					Name:            "gameserver",
+					Image:           "ghcr.io/devnull-twitch/teamfactory-server:latest",
+					Ports: []v1.ContainerPort{
+						{ContainerPort: 50125, Protocol: v1.ProtocolUDP},
+					},
+				},
+			},
+		},
+	}, metav1.CreateOptions{})
+
+	if err != nil {
+		panic(fmt.Errorf("pod creation panic: %w", err))
+	}
+
+	newService, err := clientset.CoreV1().Services("teamfactory").Create(context.Background(), &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: "teamfactory-gs-service",
+			Labels: map[string]string{
+				"game":  "teamfactory",
+				"ident": ident,
+			},
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: createdPod.APIVersion,
+					Kind:       createdPod.Kind,
+					Name:       createdPod.Name,
+					UID:        createdPod.UID,
+				},
+			},
+		},
+		Spec: v1.ServiceSpec{
+			Selector: map[string]string{
+				"game":  "teamfactory",
+				"ident": ident,
+			},
+			Type: v1.ServiceTypeNodePort,
+			Ports: []v1.ServicePort{
+				{Port: 50125, Protocol: v1.ProtocolUDP},
+			},
+		},
+	}, metav1.CreateOptions{})
+
+	if err != nil {
+		panic(fmt.Errorf("service creation panic: %w", err))
+	}
+
+	freeListLock.Lock()
+	freeList = append(freeList, gameserverData{
+		Port:       int(newService.Spec.Ports[0].NodePort),
+		Identifier: ident,
+	})
+	freeListLock.Unlock()
 }
 
 func responseWithTimeout(channel chan<- PortResponse, resp PortResponse) {
