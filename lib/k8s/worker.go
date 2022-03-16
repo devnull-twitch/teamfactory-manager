@@ -126,16 +126,19 @@ func Worker() chan<- Request {
 }
 
 func cleanupServers(clientset *kubernetes.Clientset) {
-	podList, err := clientset.CoreV1().Pods("teamfactory").List(context.Background(), metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("game=teamfactory"),
-		FieldSelector: "status.phase=Failed,status.phase=Succeeded",
-	})
-	if err != nil {
-		logrus.WithError(err).Error("unable to list pods for cleanup")
-	}
+	for _, phase := range []string{"Failed", "Succeeded"} {
+		podList, err := clientset.CoreV1().Pods("teamfactory").List(context.Background(), metav1.ListOptions{
+			LabelSelector: fmt.Sprintf("game=teamfactory"),
+			FieldSelector: fmt.Sprintf("status.phase=%s", phase),
+		})
+		if err != nil {
+			logrus.WithError(err).Error("unable to list pods for cleanup")
+			return
+		}
 
-	for _, p := range podList.Items {
-		clientset.CoreV1().Pods("teamfactory").Delete(context.Background(), p.Name, metav1.DeleteOptions{})
+		for _, p := range podList.Items {
+			clientset.CoreV1().Pods("teamfactory").Delete(context.Background(), p.Name, metav1.DeleteOptions{})
+		}
 	}
 }
 
@@ -147,15 +150,17 @@ func validateServer(clientset *kubernetes.Clientset, ident string) {
 	for _, gsInfo := range freeList {
 		list, err := clientset.CoreV1().Pods("teamfactory").List(context.Background(), metav1.ListOptions{
 			LabelSelector: fmt.Sprintf("game=teamfactory,ident=%s", gsInfo.Identifier),
-			FieldSelector: "status.phase=Running,status.phase=Pending",
 		})
 		if err != nil {
-			logrus.WithError(err).Warn("erro listing expected running gameserver")
+			logrus.WithError(err).Warn("error listing expected running gameserver")
 			continue
 		}
 
 		if len(list.Items) > 0 {
-			filteredList = append(filteredList, gsInfo)
+			podPhase := list.Items[0].Status.Phase
+			if podPhase == v1.PodRunning || podPhase == v1.PodPending {
+				filteredList = append(filteredList, gsInfo)
+			}
 		} else {
 			logrus.Warn("removed gameserver after not finding it")
 		}
@@ -196,6 +201,11 @@ func spawnNewServer(clientset *kubernetes.Clientset) {
 		panic(fmt.Errorf("pod creation panic: %w", err))
 	}
 
+	logrus.WithFields(logrus.Fields{
+		"Name": createdPod.Name,
+		"UID":  createdPod.UID,
+	}).Info("created new gameserver")
+
 	newService, err := clientset.CoreV1().Services("teamfactory").Create(context.Background(), &v1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "teamfactory-gs-service",
@@ -205,8 +215,8 @@ func spawnNewServer(clientset *kubernetes.Clientset) {
 			},
 			OwnerReferences: []metav1.OwnerReference{
 				{
-					APIVersion: createdPod.APIVersion,
-					Kind:       createdPod.Kind,
+					APIVersion: "v1",
+					Kind:       "Pod",
 					Name:       createdPod.Name,
 					UID:        createdPod.UID,
 				},

@@ -6,8 +6,8 @@ WORKDIR /app
 
 COPY . .
 
-COPY ./netrc /root/.netrc
-RUN chmod 600 /root/.netrc
+#COPY ./netrc /root/.netrc
+#RUN chmod 600 /root/.netrc
 
 RUN go mod download && \
     go build -o api main.go
