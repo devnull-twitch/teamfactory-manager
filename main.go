@@ -54,6 +54,7 @@ func main() {
 				c.JSON(http.StatusOK, struct {
 					IP   string `json:"ip"`
 					Port int    `json:"port"`
+					Code string `json:"code"`
 				}{
 					IP:   os.Getenv("EXTERNAL_IP"),
 					Port: respData.Port,

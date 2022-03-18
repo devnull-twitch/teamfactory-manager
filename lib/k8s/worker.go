@@ -40,7 +40,7 @@ const (
 	MarkRunningAction
 
 	MinFreeServers  int = 1
-	MaxServers      int = 8
+	MaxServers      int = 6
 	LobbyCodeLength int = 5
 )
 
@@ -108,9 +108,10 @@ func Worker() chan<- Request {
 	}()
 
 	go func() {
+		podCount := 0
 		for {
 			time.Sleep(time.Second * 10)
-			if len(freeList) < MinFreeServers {
+			if len(freeList) < MinFreeServers && podCount < MaxServers {
 				spawnNewServer(clientset)
 			} else {
 				for _, data := range freeList {
@@ -118,28 +119,29 @@ func Worker() chan<- Request {
 				}
 			}
 
-			cleanupServers(clientset)
+			podCount = cleanupServers(clientset)
 		}
 	}()
 
 	return requestChan
 }
 
-func cleanupServers(clientset *kubernetes.Clientset) {
-	for _, phase := range []string{"Failed", "Succeeded"} {
-		podList, err := clientset.CoreV1().Pods("teamfactory").List(context.Background(), metav1.ListOptions{
-			LabelSelector: fmt.Sprintf("game=teamfactory"),
-			FieldSelector: fmt.Sprintf("status.phase=%s", phase),
-		})
-		if err != nil {
-			logrus.WithError(err).Error("unable to list pods for cleanup")
-			return
-		}
+func cleanupServers(clientset *kubernetes.Clientset) int {
+	podList, err := clientset.CoreV1().Pods("teamfactory").List(context.Background(), metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("game=teamfactory"),
+	})
+	if err != nil {
+		logrus.WithError(err).Error("unable to list pods for cleanup")
+		return 0
+	}
 
-		for _, p := range podList.Items {
+	for _, p := range podList.Items {
+		if p.Status.Phase == v1.PodFailed || p.Status.Phase == v1.PodSucceeded {
 			clientset.CoreV1().Pods("teamfactory").Delete(context.Background(), p.Name, metav1.DeleteOptions{})
 		}
 	}
+
+	return len(podList.Items)
 }
 
 func validateServer(clientset *kubernetes.Clientset, ident string) {
